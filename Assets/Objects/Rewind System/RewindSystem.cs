@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 
 using UnityEngine;
-using UnityEngine.Rendering.Universal;
 
 public class RewindSystem : MonoBehaviour
 {
@@ -136,12 +135,12 @@ public class RewindSystem : MonoBehaviour
 
         void Simulate()
         {
-            //Remove discarded ticks
-            while (Ticks.Count > 0)
-            {
-                ref var entry = ref Ticks[^1];
+            var diff = Ticks[^1].Index - Anchor.Index;
 
-                if (entry.Index <= Anchor.Index)
+            //Clear Discarded Snapshots
+            for (int i = 0; i < diff; i++)
+            {
+                if (Ticks.Count is 0)
                     break;
 
                 Ticks.Pop();
