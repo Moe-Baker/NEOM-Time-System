@@ -26,6 +26,12 @@ public class TransformRewindRecorder : RewindSnapshotRecorder<TransformRewindSna
         Target.rotation = snapshot.Rotation;
         Target.localScale = snapshot.Scale;
     }
+
+    public TransformRewindRecorder() { }
+    public TransformRewindRecorder(Transform Target)
+    {
+        SetTarget(Target);
+    }
 }
 
 public struct TransformRewindSnapshot
