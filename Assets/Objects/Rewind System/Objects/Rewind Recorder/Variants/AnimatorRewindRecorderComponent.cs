@@ -159,6 +159,7 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         }
 
         //Create Root Motion Recorder
+        if (animator.applyRootMotion)
         {
             var recorder = new TransformRewindRecorder(animator.transform);
             Recorders.Add(recorder);
