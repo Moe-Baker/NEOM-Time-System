@@ -10,6 +10,12 @@ public class TimeEntity : MonoBehaviour
         RewindTick SpawnTick;
         RewindTick DespawnTick;
 
+        public TimeEntity Target { get; private set; }
+        public void SetTarget(TimeEntity reference)
+        {
+            Target = reference;
+        }
+
         public override void Begin()
         {
             base.Begin();
@@ -17,8 +23,8 @@ public class TimeEntity : MonoBehaviour
             SpawnTick = RewindSystem.Timeline.AnchorTick;
             DespawnTick = RewindTick.Max;
 
-            Entity.OnDespawn += EntityDespawnCallback;
-            Entity.OnRespawn += EntityRespawnCallback;
+            Target.OnDespawn += EntityDespawnCallback;
+            Target.OnRespawn += EntityRespawnCallback;
 
             RewindSystem.OnDiscard += Discard;
         }
@@ -43,7 +49,7 @@ public class TimeEntity : MonoBehaviour
             if (context.Tick.Index >= DespawnTick.Index)
             {
                 RewindSystem.OnDiscard -= Discard;
-                Entity.Destroy();
+                Target.Destroy();
             }
         }
 
@@ -55,7 +61,7 @@ public class TimeEntity : MonoBehaviour
             {
                 case SpawnState.UnSpawned:
                 case SpawnState.Despawned:
-                    Entity.SetActive(false);
+                    Target.SetActive(false);
                     break;
 
                 case SpawnState.Live:
@@ -70,17 +76,17 @@ public class TimeEntity : MonoBehaviour
             switch (state)
             {
                 case SpawnState.UnSpawned:
-                    Entity.Destroy();
+                    Target.Destroy();
                     break;
 
                 case SpawnState.Despawned:
-                    Entity.SetActive(false);
+                    Target.SetActive(false);
                     break;
 
                 case SpawnState.Live:
                 {
-                    if (Entity.IsSpawned is false)
-                        Entity.Respawn();
+                    if (Target.IsSpawned is false)
+                        Target.Respawn();
 
                     base.Simulate(context);
                 }
@@ -105,11 +111,16 @@ public class TimeEntity : MonoBehaviour
 
         protected override LifetimeSnapshot CreateSnapshot()
         {
-            return new LifetimeSnapshot(Entity.gameObject.activeSelf);
+            return new LifetimeSnapshot(Target.gameObject.activeSelf);
         }
         protected override void ApplySnapshot(in LifetimeSnapshot snapshot, SnapshotApplyConfiguration configuration)
         {
-            Entity.SetActive(snapshot.IsActive);
+            Target.SetActive(snapshot.IsActive);
+        }
+
+        public LifetimeRecorder(TimeEntity Target)
+        {
+            SetTarget(Target);
         }
     }
     public struct LifetimeSnapshot
@@ -125,8 +136,7 @@ public class TimeEntity : MonoBehaviour
     {
         IsSpawned = true;
 
-        Lifetime = new LifetimeRecorder();
-        Lifetime.Set(this);
+        Lifetime = new LifetimeRecorder(this);
         Lifetime.Begin();
     }
     void OnDestroy()

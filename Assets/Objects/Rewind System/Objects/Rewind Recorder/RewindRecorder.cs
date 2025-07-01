@@ -27,12 +27,6 @@ public abstract class RewindRecorder
 {
     protected static RewindSystem RewindSystem => RewindSystem.Instance;
 
-    public TimeEntity Entity { get; private set; }
-    public void Set(TimeEntity reference)
-    {
-        Entity = reference;
-    }
-
     public virtual void Begin() { }
     public virtual void End() { }
 }
@@ -45,6 +39,8 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
     public override void Begin()
     {
         base.Begin();
+
+        Snapshots = new RingBuffer<TSnapshot>(RewindSystem.MaxSnapshotsCapacity);
 
         RewindSystem.OnCapture += Capture;
         RewindSystem.OnReplicate += Replicate;
@@ -105,24 +101,20 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
     protected abstract TSnapshot CreateSnapshot();
 
     protected abstract void ApplySnapshot(in TSnapshot snapshot, SnapshotApplyConfiguration configuration);
-    public struct SnapshotApplyConfiguration
-    {
-        public RewindTick Tick { get; }
-        public SnapshotApplySource Source { get; }
+}
 
-        public SnapshotApplyConfiguration(RewindTick Tick, SnapshotApplySource Source)
-        {
-            this.Tick = Tick;
-            this.Source = Source;
-        }
-    }
-    public enum SnapshotApplySource
-    {
-        Replication, Simulate
-    }
+public struct SnapshotApplyConfiguration
+{
+    public RewindTick Tick { get; }
+    public SnapshotApplySource Source { get; }
 
-    protected RewindSnapshotRecorder()
+    public SnapshotApplyConfiguration(RewindTick Tick, SnapshotApplySource Source)
     {
-        Snapshots = new RingBuffer<TSnapshot>(RewindSystem.MaxSnapshotsCapacity);
+        this.Tick = Tick;
+        this.Source = Source;
     }
+}
+public enum SnapshotApplySource
+{
+    Replication, Simulate
 }
