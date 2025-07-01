@@ -39,7 +39,7 @@ public abstract class RewindRecorder
 
 public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
 {
-    int Anchor;
+    RewindTick AnchorTick;
     RingBuffer<TSnapshot> Snapshots;
 
     public override void Begin()
@@ -64,24 +64,24 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
         var snapshot = CreateSnapshot();
         Snapshots.Push(snapshot);
 
-        Anchor = context.Tick;
+        AnchorTick = context.Tick;
     }
     protected virtual void Replicate(RewindPlaybackContext context)
     {
-        var depth = Anchor - context.Tick;
+        var depth = AnchorTick.Index - context.Tick.Index;
         var index = ^(1 + depth);
 
         if (Snapshots.HasIndex(index))
         {
             ref var snapshot = ref Snapshots[index];
-            var configuration = new SnapshotApplyConfiguration(SnapshotApplySource.Replication);
+            var configuration = new SnapshotApplyConfiguration(context.Tick, SnapshotApplySource.Replication);
             ApplySnapshot(in snapshot, configuration);
         }
     }
     protected virtual void Simulate(RewindSimulationContext context)
     {
-        var diff = Anchor - context.Tick;
-        Anchor = context.Tick;
+        var diff = AnchorTick.Index - context.Tick.Index;
+        AnchorTick = context.Tick;
 
         //Clear Discarded Snapshots
         for (int i = 0; i < diff; i++)
@@ -96,7 +96,7 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
         if (Snapshots.Count > 0)
         {
             ref var snapshot = ref Snapshots[^1];
-            var configuration = new SnapshotApplyConfiguration(SnapshotApplySource.Simulate);
+            var configuration = new SnapshotApplyConfiguration(context.Tick, SnapshotApplySource.Simulate);
 
             ApplySnapshot(in snapshot, configuration);
         }
@@ -107,10 +107,12 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
     protected abstract void ApplySnapshot(in TSnapshot snapshot, SnapshotApplyConfiguration configuration);
     public struct SnapshotApplyConfiguration
     {
+        public RewindTick Tick { get; }
         public SnapshotApplySource Source { get; }
 
-        public SnapshotApplyConfiguration(SnapshotApplySource Source)
+        public SnapshotApplyConfiguration(RewindTick Tick, SnapshotApplySource Source)
         {
+            this.Tick = Tick;
             this.Source = Source;
         }
     }

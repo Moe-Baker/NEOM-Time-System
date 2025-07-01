@@ -5,7 +5,6 @@ using UnityEngine;
 
 public class RewindSystem : MonoBehaviour
 {
-
     [SerializeField, Tooltip("Max Desired FPS")]
     int MaxFPS = 60;
 
@@ -14,7 +13,7 @@ public class RewindSystem : MonoBehaviour
 
     public int MaxSnapshotsCapacity => Mathf.CeilToInt(MaxFPS * MaxDuration);
 
-    void Capture(int tick)
+    void Capture(RewindTick tick)
     {
         var context = new RewindCaptureContext(tick);
         OnCapture?.Invoke(context);
@@ -22,15 +21,23 @@ public class RewindSystem : MonoBehaviour
     public event CaptureContextDelegate OnCapture;
     public delegate void CaptureContextDelegate(RewindCaptureContext context);
 
-    void Replicate(int tick)
+    void Discard(RewindTick tick)
+    {
+        var context = new RewindDiscardContext(tick);
+        OnDiscard?.Invoke(context);
+    }
+    public event DiscardContextDelegate OnDiscard;
+    public delegate void DiscardContextDelegate(RewindDiscardContext context);
+
+    void Replicate(RewindTick tick)
     {
         var context = new RewindPlaybackContext(tick);
-        OnReplicate(context);
+        OnReplicate?.Invoke(context);
     }
     public event PlaybackContextDelegate OnReplicate;
     public delegate void PlaybackContextDelegate(RewindPlaybackContext context);
 
-    void Simulate(int tick)
+    void Simulate(RewindTick tick)
     {
         var context = new RewindSimulationContext(tick);
         OnSimulate?.Invoke(context);
@@ -43,45 +50,13 @@ public class RewindSystem : MonoBehaviour
     [Serializable]
     public class TimelineModule : IModule<RewindSystem>
     {
-        TickData Anchor;
-        RingBuffer<TickData> Ticks;
-        public struct TickData
-        {
-            /// <summary>
-            /// Index of tick
-            /// </summary>
-            public int Index { get; }
+        public RewindTick AnchorTick { get; private set; }
 
-            /// <summary>
-            /// Duration of this one single tick
-            /// </summary>
-            public float Delta { get; }
+        RingBuffer<RewindTick> TickHistory;
+        public int TickCount => TickHistory.Count;
 
-            /// <summary>
-            /// Timestamp of current tick, basically the accumulation of all previous ticks deltas
-            /// </summary>
-            public float Timestamp { get; }
-
-            public TickData(int Index, float Delta, float Timestamp)
-            {
-                this.Index = Index;
-                this.Delta = Delta;
-                this.Timestamp = Timestamp;
-            }
-
-            public static TickData Increment(TickData data, float deltaTime)
-            {
-                var index = data.Index + 1;
-                var timestamp = data.Timestamp + deltaTime;
-
-                return new TickData(index, deltaTime, timestamp);
-            }
-        }
-
-        public int TickCount => Ticks.Count;
-
-        public float MaxTime => Anchor.Timestamp;
-        public float MinTime => Mathf.Max(Ticks[0].Timestamp, MaxTime - Rewind.MaxDuration);
+        public float MaxTime => AnchorTick.Timestamp;
+        public float MinTime => Mathf.Max(TickHistory[0].Timestamp, MaxTime - Rewind.MaxDuration);
 
         public TimelineState State { get; private set; }
 
@@ -106,8 +81,8 @@ public class RewindSystem : MonoBehaviour
 
             State = TimelineState.Live;
 
-            Anchor = new TickData(-1, 0f, 0f);
-            Ticks = new RingBuffer<TickData>(Rewind.MaxSnapshotsCapacity);
+            AnchorTick = new RewindTick(-1, 0f, 0f);
+            TickHistory = new RingBuffer<RewindTick>(Rewind.MaxSnapshotsCapacity);
 
             Rewind.OnUpdate += Update;
         }
@@ -135,18 +110,19 @@ public class RewindSystem : MonoBehaviour
 
         void Simulate()
         {
-            var diff = Ticks[^1].Index - Anchor.Index;
+            Rewind.Simulate(AnchorTick);
+
+            var diff = TickHistory[^1].Index - AnchorTick.Index;
 
             //Clear Discarded Snapshots
             for (int i = 0; i < diff; i++)
             {
-                if (Ticks.Count is 0)
+                if (TickHistory.Count is 0)
                     break;
 
-                Ticks.Pop();
+                var entry = TickHistory.Pop();
+                Rewind.Discard(entry);
             }
-
-            Rewind.Simulate(Anchor.Index);
         }
 
         public void Seek(float time)
@@ -159,8 +135,8 @@ public class RewindSystem : MonoBehaviour
             if (index < 0)
                 throw new InvalidOperationException($"Invalid Seek Operation");
 
-            Anchor = Ticks[index];
-            Rewind.Replicate(Anchor.Index);
+            AnchorTick = TickHistory[index];
+            Rewind.Replicate(AnchorTick);
         }
 
         /// <summary>
@@ -171,24 +147,24 @@ public class RewindSystem : MonoBehaviour
         int IndexTimestamp(float timestamp)
         {
             // If the array is empty
-            if (Ticks.Count == 0)
+            if (TickHistory.Count == 0)
                 return -1;
 
             int low = 0;
-            int high = Ticks.Count - 1;
+            int high = TickHistory.Count - 1;
 
             // If target is less than the first element
-            if (timestamp <= Ticks[low].Timestamp)
+            if (timestamp <= TickHistory[low].Timestamp)
                 return low;
 
             // If target is more than the last element
-            if (timestamp >= Ticks[high].Timestamp)
+            if (timestamp >= TickHistory[high].Timestamp)
                 return high;
 
             while (low <= high)
             {
                 var mid = (low + high) / 2;
-                var value = Ticks[mid].Timestamp;
+                var value = TickHistory[mid].Timestamp;
 
                 if (value == timestamp)
                     return mid;
@@ -202,10 +178,10 @@ public class RewindSystem : MonoBehaviour
             // At this point, low > high. The closest values are array[high] and array[low]
             // Handle bounds
             if (high < 0) return low;
-            if (low >= Ticks.Count) return high;
+            if (low >= TickHistory.Count) return high;
 
             // Return the closest one
-            return Math.Abs(Ticks[low].Timestamp - timestamp) < Math.Abs(Ticks[high].Timestamp - timestamp)
+            return Math.Abs(TickHistory[low].Timestamp - timestamp) < Math.Abs(TickHistory[high].Timestamp - timestamp)
                 ? low
                 : high;
         }
@@ -225,11 +201,27 @@ public class RewindSystem : MonoBehaviour
         }
         void Capture()
         {
-            Anchor = TickData.Increment(Anchor, Time.deltaTime);
+            AnchorTick = RewindTick.Increment(AnchorTick, Time.deltaTime);
 
-            Rewind.Capture(Anchor.Index);
+            if (TickHistory.IsFull)
+            {
+                var entry = TickHistory.Dequeue();
+                Rewind.Discard(entry);
+            }
 
-            Ticks.Push(Anchor);
+            while (TickHistory.Count > 0)
+            {
+                ref var entry = ref TickHistory[0];
+
+                if (entry.Timestamp > AnchorTick.Timestamp - Rewind.MaxDuration)
+                    break;
+
+                TickHistory.Dequeue();
+                Rewind.Discard(entry);
+            }
+
+            Rewind.Capture(AnchorTick);
+            TickHistory.Push(AnchorTick);
         }
     }
 
@@ -265,11 +257,59 @@ public enum TimelineState
     Live, Paused
 }
 
+public struct RewindTick
+{
+    /// <summary>
+    /// Index of tick
+    /// </summary>
+    public int Index { get; }
+
+    /// <summary>
+    /// Duration of this one single tick
+    /// </summary>
+    public float Delta { get; }
+
+    /// <summary>
+    /// Timestamp of current tick, basically the accumulation of all previous ticks deltas
+    /// </summary>
+    public float Timestamp { get; }
+
+    public override string ToString() => $"[Index: {Index} | Delta: {Delta} | Timestamp: {Timestamp}]";
+
+    public RewindTick(int Index, float Delta, float Timestamp)
+    {
+        this.Index = Index;
+        this.Delta = Delta;
+        this.Timestamp = Timestamp;
+    }
+
+    public static RewindTick Increment(RewindTick data, float deltaTime)
+    {
+        var index = data.Index + 1;
+        var timestamp = data.Timestamp + deltaTime;
+
+        return new RewindTick(index, deltaTime, timestamp);
+    }
+
+    public static RewindTick Zero => new RewindTick(0, 0, 0);
+    public static RewindTick Max => new RewindTick(int.MaxValue, float.MaxValue, float.MaxValue);
+}
+
 public struct RewindCaptureContext
 {
-    public int Tick { get; }
+    public RewindTick Tick { get; }
 
-    public RewindCaptureContext(int Tick)
+    public RewindCaptureContext(RewindTick Tick)
+    {
+        this.Tick = Tick;
+    }
+}
+
+public struct RewindDiscardContext
+{
+    public RewindTick Tick { get; }
+
+    public RewindDiscardContext(RewindTick Tick)
     {
         this.Tick = Tick;
     }
@@ -277,9 +317,9 @@ public struct RewindCaptureContext
 
 public struct RewindPlaybackContext
 {
-    public int Tick { get; }
+    public RewindTick Tick { get; }
 
-    public RewindPlaybackContext(int Tick)
+    public RewindPlaybackContext(RewindTick Tick)
     {
         this.Tick = Tick;
     }
@@ -287,9 +327,9 @@ public struct RewindPlaybackContext
 
 public struct RewindSimulationContext
 {
-    public int Tick { get; }
+    public RewindTick Tick { get; }
 
-    public RewindSimulationContext(int Tick)
+    public RewindSimulationContext(RewindTick Tick)
     {
         this.Tick = Tick;
     }
