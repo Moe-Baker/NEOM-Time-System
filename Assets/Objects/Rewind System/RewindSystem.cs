@@ -84,7 +84,7 @@ public class RewindSystem : MonoBehaviour
             AnchorTick = new RewindTick(-1, 0f, 0f);
             TickHistory = new RingBuffer<RewindTick>(Rewind.MaxSnapshotsCapacity);
 
-            Rewind.OnUpdate += Update;
+            Rewind.OnProcess += Process;
         }
 
         public void Pause()
@@ -186,7 +186,7 @@ public class RewindSystem : MonoBehaviour
                 : high;
         }
 
-        void Update()
+        void Process()
         {
             switch (State)
             {
@@ -230,11 +230,11 @@ public class RewindSystem : MonoBehaviour
         Timeline.SetReference(this);
     }
 
-    void Update()
+    void LateUpdate()
     {
-        OnUpdate?.Invoke();
+        OnProcess?.Invoke();
     }
-    public event Action OnUpdate;
+    public event Action OnProcess;
 
     #region Singeleton
     public static RewindSystem Instance { get; private set; }
