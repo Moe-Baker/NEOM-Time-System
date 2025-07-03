@@ -227,6 +227,8 @@ public class RewindSystem : MonoBehaviour
 
     void Awake()
     {
+        Application.targetFrameRate = MaxFPS;
+
         Timeline.SetReference(this);
     }
 
