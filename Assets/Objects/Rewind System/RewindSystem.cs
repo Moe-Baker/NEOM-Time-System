@@ -257,22 +257,23 @@ public enum TimelineState
     Live, Paused
 }
 
+[Serializable]
 public struct RewindTick
 {
     /// <summary>
     /// Index of tick
     /// </summary>
-    public int Index { get; }
+    public int Index { get; private set; }
 
     /// <summary>
     /// Duration of this one single tick
     /// </summary>
-    public float Delta { get; }
+    public float Delta { get; private set; }
 
     /// <summary>
     /// Timestamp of current tick, basically the accumulation of all previous ticks deltas
     /// </summary>
-    public float Timestamp { get; }
+    public float Timestamp { get; private set; }
 
     public override string ToString() => $"[Index: {Index} | Delta: {Delta} | Timestamp: {Timestamp}]";
 

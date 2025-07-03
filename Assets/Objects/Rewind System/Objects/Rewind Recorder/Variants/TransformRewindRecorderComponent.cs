@@ -1,3 +1,5 @@
+using System;
+
 using UnityEngine;
 
 public class TransformRewindRecorderComponent : RewindRecorderComponent<TransformRewindRecorder>
@@ -8,7 +10,8 @@ public class TransformRewindRecorderComponent : RewindRecorderComponent<Transfor
     }
 }
 
-public class TransformRewindRecorder : RewindSnapshotRecorder<TransformRewindSnapshot>
+[Serializable]
+public class TransformRewindRecorder : RewindSnapshotRecorder<TransformRewindState>
 {
     public Transform Target { get; private set; }
     public void SetTarget(Transform value)
@@ -16,15 +19,23 @@ public class TransformRewindRecorder : RewindSnapshotRecorder<TransformRewindSna
         Target = value;
     }
 
-    protected override TransformRewindSnapshot CreateSnapshot()
+    protected override TransformRewindState CreateState()
     {
-        return new TransformRewindSnapshot(Target.position, Target.rotation, Target.localScale);
+        return new TransformRewindState(Target.position, Target.rotation, Target.localScale);
     }
-    protected override void ApplySnapshot(in TransformRewindSnapshot snapshot, SnapshotApplyConfiguration configuration)
+    protected override void ApplyState(in TransformRewindState snapshot, SnapshotApplyConfiguration configuration)
     {
         Target.position = snapshot.Position;
         Target.rotation = snapshot.Rotation;
         Target.localScale = snapshot.Scale;
+    }
+    protected override bool CheckChange(in TransformRewindState a, in TransformRewindState b)
+    {
+        if (ChangeChecker.CheckChange(a.Position, b.Position)) return true;
+        if (ChangeChecker.CheckChange(a.Rotation, b.Rotation)) return true;
+        if (ChangeChecker.CheckChange(a.Scale, b.Scale)) return true;
+
+        return false;
     }
 
     public TransformRewindRecorder() { }
@@ -34,13 +45,13 @@ public class TransformRewindRecorder : RewindSnapshotRecorder<TransformRewindSna
     }
 }
 
-public struct TransformRewindSnapshot
+public struct TransformRewindState
 {
     public Vector3 Position { get; }
     public Quaternion Rotation { get; }
     public Vector3 Scale { get; }
 
-    public TransformRewindSnapshot(Vector3 Position, Quaternion Rotation, Vector3 Scale)
+    public TransformRewindState(Vector3 Position, Quaternion Rotation, Vector3 Scale)
     {
         this.Position = Position;
         this.Rotation = Rotation;

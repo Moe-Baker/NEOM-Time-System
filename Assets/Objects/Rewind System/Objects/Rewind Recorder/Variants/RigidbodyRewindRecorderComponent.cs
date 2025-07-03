@@ -1,3 +1,5 @@
+using System;
+
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody))]
@@ -10,7 +12,8 @@ public class RigidbodyRewindRecorderComponent : RewindRecorderComponent<Rigidbod
     }
 }
 
-public class RigidbodyRewindRecorder : RewindSnapshotRecorder<RigidbodyRewindSnapshot>
+[Serializable]
+public class RigidbodyRewindRecorder : RewindSnapshotRecorder<RigidbodyRewindState>
 {
     public Rigidbody Target { get; private set; }
     public void SetTarget(Rigidbody value)
@@ -36,14 +39,14 @@ public class RigidbodyRewindRecorder : RewindSnapshotRecorder<RigidbodyRewindSna
         Target.isKinematic = true;
     }
 
-    protected override RigidbodyRewindSnapshot CreateSnapshot()
+    protected override RigidbodyRewindState CreateState()
     {
         var position = (Target.interpolation is RigidbodyInterpolation.None) ? Target.position : Target.transform.position;
         var rotation = (Target.interpolation is RigidbodyInterpolation.None) ? Target.rotation : Target.transform.rotation;
 
-        return new RigidbodyRewindSnapshot(Target.isKinematic, position, Target.linearVelocity, rotation, Target.angularVelocity);
+        return new RigidbodyRewindState(Target.isKinematic, position, Target.linearVelocity, rotation, Target.angularVelocity);
     }
-    protected override void ApplySnapshot(in RigidbodyRewindSnapshot snapshot, SnapshotApplyConfiguration configuration)
+    protected override void ApplyState(in RigidbodyRewindState snapshot, SnapshotApplyConfiguration configuration)
     {
         Target.position = snapshot.Position;
         Target.rotation = snapshot.Rotation;
@@ -65,9 +68,22 @@ public class RigidbodyRewindRecorder : RewindSnapshotRecorder<RigidbodyRewindSna
             break;
         }
     }
+
+    protected override bool CheckChange(in RigidbodyRewindState a, in RigidbodyRewindState b)
+    {
+        if (ChangeChecker.CheckChange(a.IsKinematic, b.IsKinematic)) return true;
+
+        if (ChangeChecker.CheckChange(a.Position, b.Position)) return true;
+        if (ChangeChecker.CheckChange(a.LinearVelocity, b.LinearVelocity)) return true;
+
+        if (ChangeChecker.CheckChange(a.Rotation, b.Rotation)) return true;
+        if (ChangeChecker.CheckChange(a.AngularVelocity, b.AngularVelocity)) return true;
+
+        return false;
+    }
 }
 
-public struct RigidbodyRewindSnapshot
+public struct RigidbodyRewindState
 {
     public bool IsKinematic { get; }
 
@@ -77,7 +93,7 @@ public struct RigidbodyRewindSnapshot
     public Quaternion Rotation { get; }
     public Vector3 AngularVelocity { get; }
 
-    public RigidbodyRewindSnapshot(bool IsKinematic, Vector3 Position, Vector3 LinearVelocity, Quaternion Rotation, Vector3 AngularVelocity)
+    public RigidbodyRewindState(bool IsKinematic, Vector3 Position, Vector3 LinearVelocity, Quaternion Rotation, Vector3 AngularVelocity)
     {
         this.IsKinematic = IsKinematic;
         this.Position = Position;

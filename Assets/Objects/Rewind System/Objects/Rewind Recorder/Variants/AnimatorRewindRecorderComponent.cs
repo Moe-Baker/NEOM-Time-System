@@ -23,7 +23,8 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         Everything = ~0,
     }
 
-    public class StateRecorder : RewindSnapshotRecorder<StateSnapshot>
+    [Serializable]
+    public class ComponentRecorder : RewindSnapshotRecorder<ComponentState>
     {
         AnimatorRewindRecorderComponent Component;
         Animator Animator => Component.Animator;
@@ -44,13 +45,14 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         void TimelinePauseCallback()
         {
             Animator.enabled = false;
+            Animator.applyRootMotion = false;
         }
 
-        protected override StateSnapshot CreateSnapshot()
+        protected override ComponentState CreateState()
         {
-            return new StateSnapshot(Animator.enabled, Animator.applyRootMotion);
+            return new ComponentState(Animator.enabled, Animator.applyRootMotion);
         }
-        protected override void ApplySnapshot(in StateSnapshot snapshot, SnapshotApplyConfiguration configuration)
+        protected override void ApplyState(in ComponentState snapshot, SnapshotApplyConfiguration configuration)
         {
             switch (configuration.Source)
             {
@@ -67,13 +69,20 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
                 default: throw new NotImplementedException();
             }
         }
+        protected override bool CheckChange(in ComponentState a, in ComponentState b)
+        {
+            if (ChangeChecker.CheckChange(a.Enabled, b.Enabled)) return true;
+            if (ChangeChecker.CheckChange(a.ApplyRootMotion, b.ApplyRootMotion)) return true;
 
-        public StateRecorder(AnimatorRewindRecorderComponent Component)
+            return false;
+        }
+
+        public ComponentRecorder(AnimatorRewindRecorderComponent Component)
         {
             this.Component = Component;
         }
     }
-    public struct StateSnapshot
+    public struct ComponentState
     {
         BooleanStates Booleans;
         [Flags]
@@ -88,7 +97,7 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         public bool Enabled => Booleans.HasFlag(BooleanStates.Enabled);
         public bool ApplyRootMotion => Booleans.HasFlag(BooleanStates.ApplyRootMotion);
 
-        public StateSnapshot(bool Enabled, bool ApplyRootMotion)
+        public ComponentState(bool Enabled, bool ApplyRootMotion)
         {
             Booleans = BooleanStates.None;
 
@@ -97,7 +106,8 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         }
     }
 
-    public class BoneRecorder : RewindSnapshotRecorder<BoneSnapshot>
+    [Serializable]
+    public class BoneRecorder : RewindSnapshotRecorder<BoneState>
     {
         Transform Target;
         public void SetTarget(Transform value)
@@ -105,10 +115,16 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
             Target = value;
         }
 
-        protected override BoneSnapshot CreateSnapshot() => new BoneSnapshot(Target.localRotation);
-        protected override void ApplySnapshot(in BoneSnapshot snapshot, SnapshotApplyConfiguration configuration)
+        protected override BoneState CreateState() => new BoneState(Target.localRotation);
+        protected override void ApplyState(in BoneState snapshot, SnapshotApplyConfiguration configuration)
         {
             Target.localRotation = snapshot.Rotation;
+        }
+        protected override bool CheckChange(in BoneState a, in BoneState b)
+        {
+            if (ChangeChecker.CheckChange(a.Rotation, b.Rotation)) return true;
+
+            return false;
         }
 
         public BoneRecorder(Transform Target)
@@ -116,31 +132,32 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
             SetTarget(Target);
         }
     }
-    public struct BoneSnapshot
+    public struct BoneState
     {
         public Quaternion Rotation { get; private set; }
 
-        public BoneSnapshot(Quaternion Rotation)
+        public BoneState(Quaternion Rotation)
         {
             this.Rotation = Rotation;
         }
     }
 
-    public class LayerRecorder : RewindSnapshotRecorder<LayerSnapshot>
+    [Serializable]
+    public class LayerRecorder : RewindSnapshotRecorder<LayerState>
     {
         AnimatorRewindRecorderComponent Component;
         Animator Animator => Component.Animator;
 
         int LayerIndex;
 
-        protected override LayerSnapshot CreateSnapshot()
+        protected override LayerState CreateState()
         {
-            var info = Animator.GetCurrentAnimatorStateInfo(LayerIndex);
             var weight = Animator.GetLayerWeight(LayerIndex);
+            var info = Animator.GetCurrentAnimatorStateInfo(LayerIndex);
 
-            return new LayerSnapshot(info.shortNameHash, info.normalizedTime, weight);
+            return new LayerState(weight, info.shortNameHash, info.normalizedTime);
         }
-        protected override void ApplySnapshot(in LayerSnapshot snapshot, SnapshotApplyConfiguration configuration)
+        protected override void ApplyState(in LayerState snapshot, SnapshotApplyConfiguration configuration)
         {
             switch (configuration.Source)
             {
@@ -168,6 +185,14 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
                 default: throw new NotImplementedException();
             }
         }
+        protected override bool CheckChange(in LayerState a, in LayerState b)
+        {
+            if (ChangeChecker.CheckChange(a.Weight, b.Weight)) return true;
+            if (ChangeChecker.CheckChange(a.StateHash, b.StateHash)) return true;
+            if (ChangeChecker.CheckChange(a.NormalizedTime, b.NormalizedTime)) return true;
+
+            return false;
+        }
 
         public LayerRecorder(AnimatorRewindRecorderComponent Component, int LayerIndex)
         {
@@ -175,17 +200,17 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
             this.LayerIndex = LayerIndex;
         }
     }
-    public struct LayerSnapshot
+    public struct LayerState
     {
+        public float Weight { get; }
         public int StateHash { get; }
         public float NormalizedTime { get; }
-        public float Weight { get; }
 
-        public LayerSnapshot(int StateHash, float NormalizedTime, float Weight)
+        public LayerState(float Weight, int StateHash, float NormalizedTime)
         {
+            this.Weight = Weight;
             this.StateHash = StateHash;
             this.NormalizedTime = NormalizedTime;
-            this.Weight = Weight;
         }
     }
 
@@ -218,9 +243,9 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
             Recorders = new List<RewindRecorder>(capacity);
         }
 
-        //Create State Recorder
+        //Create Component Recorder
         {
-            var recorder = new StateRecorder(this);
+            var recorder = new ComponentRecorder(this);
             Recorders.Add(recorder);
         }
 
@@ -228,6 +253,13 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
         if (Animator.applyRootMotion)
         {
             var recorder = new TransformRewindRecorder(Animator.transform);
+            Recorders.Add(recorder);
+        }
+
+        //Create Layer Recorder
+        for (int i = 0; i < Animator.layerCount; i++)
+        {
+            var recorder = new LayerRecorder(this, i);
             Recorders.Add(recorder);
         }
 
@@ -239,13 +271,6 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
                 var recorder = new BoneRecorder(bone);
                 Recorders.Add(recorder);
             }
-        }
-
-        //Create Layer Recorder
-        for (int i = 0; i < Animator.layerCount; i++)
-        {
-            var recorder = new LayerRecorder(this, i);
-            Recorders.Add(recorder);
         }
 
         //Ensure that animator is update so that no T-Pose is recorded

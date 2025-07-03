@@ -5,7 +5,8 @@ using UnityEngine;
 public class TimeEntity : MonoBehaviour
 {
     LifetimeRecorder Lifetime;
-    public class LifetimeRecorder : RewindSnapshotRecorder<LifetimeSnapshot>
+    [Serializable]
+    public class LifetimeRecorder : RewindSnapshotRecorder<LifetimeState>
     {
         RewindTick SpawnTick;
         RewindTick DespawnTick;
@@ -109,13 +110,19 @@ public class TimeEntity : MonoBehaviour
             UnSpawned, Live, Despawned
         }
 
-        protected override LifetimeSnapshot CreateSnapshot()
+        protected override LifetimeState CreateState()
         {
-            return new LifetimeSnapshot(Target.gameObject.activeSelf);
+            return new LifetimeState(Target.gameObject.activeSelf);
         }
-        protected override void ApplySnapshot(in LifetimeSnapshot snapshot, SnapshotApplyConfiguration configuration)
+        protected override void ApplyState(in LifetimeState snapshot, SnapshotApplyConfiguration configuration)
         {
             Target.SetActive(snapshot.IsActive);
+        }
+        protected override bool CheckChange(in LifetimeState a, in LifetimeState b)
+        {
+            if (ChangeChecker.CheckChange(a.IsActive, b.IsActive)) return true;
+
+            return false;
         }
 
         public LifetimeRecorder(TimeEntity Target)
@@ -123,10 +130,10 @@ public class TimeEntity : MonoBehaviour
             SetTarget(Target);
         }
     }
-    public struct LifetimeSnapshot
+    public struct LifetimeState
     {
         public bool IsActive { get; }
-        public LifetimeSnapshot(bool IsActive)
+        public LifetimeState(bool IsActive)
         {
             this.IsActive = IsActive;
         }

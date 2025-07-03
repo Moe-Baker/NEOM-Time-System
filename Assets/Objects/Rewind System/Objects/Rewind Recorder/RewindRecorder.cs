@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 using UnityEngine;
@@ -23,24 +24,131 @@ public abstract class RewindRecorderComponent<TRecorder> : MonoBehaviour
     public abstract void AssignTarget();
 }
 
+[Serializable]
 public abstract class RewindRecorder
 {
     protected static RewindSystem RewindSystem => RewindSystem.Instance;
 
     public virtual void Begin() { }
     public virtual void End() { }
+
+    /// <summary>
+    /// Quick utility to check if a value was changed, will return true if changed
+    /// </summary>
+    public static class ChangeChecker
+    {
+        public const float DefaultEpsilon = 0.00001f;
+
+        public static bool CheckChange(bool a, bool b) => a != b;
+
+        public static bool CheckChange(int a, int b) => CheckChange(a, b, 0);
+        public static bool CheckChange(int a, int b, int epsilon)
+        {
+            return Mathf.Abs(a - b) > epsilon;
+        }
+
+        public static bool CheckChange(float a, float b) => CheckChange(a, b, DefaultEpsilon);
+        public static bool CheckChange(float a, float b, float epsilon)
+        {
+            return Mathf.Abs(a - b) > epsilon;
+        }
+
+        public static bool CheckChange(Vector2 a, Vector2 b) => CheckChange(a, b, DefaultEpsilon);
+        public static bool CheckChange(Vector2 a, Vector2 b, float epsilon)
+        {
+            return Vector2.SqrMagnitude(a - b) > epsilon;
+        }
+
+        public static bool CheckChange(Vector3 a, Vector3 b) => CheckChange(a, b, DefaultEpsilon);
+        public static bool CheckChange(Vector3 a, Vector3 b, float epsilon)
+        {
+            var diff = (a - b);
+            var mgt = Vector3.SqrMagnitude(diff);
+
+            return mgt > epsilon;
+        }
+
+        public static bool CheckChange(Quaternion a, Quaternion b) => CheckChange(a, b, DefaultEpsilon);
+        public static bool CheckChange(Quaternion a, Quaternion b, float epsilon)
+        {
+            return Quaternion.Angle(a, b) > epsilon;
+        }
+    }
 }
 
-public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
+[Serializable]
+public abstract class RewindSnapshotRecorder<TState> : RewindRecorder
 {
     RewindTick AnchorTick;
-    RingBuffer<TSnapshot> Snapshots;
+    RingBuffer<Snapshot> Snapshots;
+    public struct Snapshot
+    {
+        public readonly int Tick;
+        public readonly TState State;
+
+        public Snapshot(int Tick, TState State)
+        {
+            this.Tick = Tick;
+            this.State = State;
+        }
+    }
+
+    bool TryGetSnapshot(int tick, out Snapshot snapshot)
+    {
+        if (TryIndexSnapshot(tick, out int index) is false)
+        {
+            snapshot = default;
+            return false;
+        }
+
+        snapshot = Snapshots[index];
+        return true;
+    }
+    bool TryIndexSnapshot(int tick, out int index)
+    {
+        if (Snapshots.Count is 0)
+        {
+            index = default;
+            return false;
+        }
+
+        if (tick < Snapshots[0].Tick || tick > AnchorTick.Index)
+        {
+            index = default;
+            return false;
+        }
+
+        var low = 0;
+        var high = Snapshots.Count - 1;
+
+        while (low <= high)
+        {
+            var mid = (low + high) / 2;
+            ref var element = ref Snapshots[mid];
+
+            if (element.Tick == tick)
+            {
+                index = mid;
+                return true;
+            }
+
+            if (tick > element.Tick)
+                low = mid + 1;
+            else
+                high = mid - 1;
+        }
+
+        (low, high) = (high, low);
+
+        index = low;
+        return true;
+    }
 
     public override void Begin()
     {
         base.Begin();
 
-        Snapshots = new RingBuffer<TSnapshot>(RewindSystem.MaxSnapshotsCapacity);
+        Snapshots = new RingBuffer<Snapshot>(RewindSystem.MaxSnapshotsCapacity);
 
         RewindSystem.OnCapture += Capture;
         RewindSystem.OnReplicate += Replicate;
@@ -57,50 +165,52 @@ public abstract class RewindSnapshotRecorder<TSnapshot> : RewindRecorder
 
     protected virtual void Capture(RewindCaptureContext context)
     {
-        var snapshot = CreateSnapshot();
-        Snapshots.Push(snapshot);
-
         AnchorTick = context.Tick;
+
+        var state = CreateState();
+
+        if (Snapshots.Count > 0 && CheckChange(in state, in Snapshots[^1].State) is false)
+            return;
+
+        var snapshot = new Snapshot(context.Tick.Index, state);
+        Snapshots.Push(snapshot);
     }
+    /// <summary>
+    /// Measures if the two states have changed
+    /// </summary>
+    /// <returns>true if changed</returns>
+    protected abstract bool CheckChange(in TState a, in TState b);
+    protected abstract TState CreateState();
+
     protected virtual void Replicate(RewindPlaybackContext context)
     {
-        var depth = AnchorTick.Index - context.Tick.Index;
-        var index = ^(1 + depth);
-
-        if (Snapshots.HasIndex(index))
+        if (TryGetSnapshot(context.Tick.Index, out var snapshot))
         {
-            ref var snapshot = ref Snapshots[index];
             var configuration = new SnapshotApplyConfiguration(context.Tick, SnapshotApplySource.Replication);
-            ApplySnapshot(in snapshot, configuration);
+            ApplyState(in snapshot.State, configuration);
         }
     }
     protected virtual void Simulate(RewindSimulationContext context)
     {
-        var diff = AnchorTick.Index - context.Tick.Index;
         AnchorTick = context.Tick;
 
-        //Clear Discarded Snapshots
-        for (int i = 0; i < diff; i++)
+        while (Snapshots.Count > 0)
         {
-            if (Snapshots.Count is 0)
-                break;
+            ref var entry = ref Snapshots[^1];
 
-            Snapshots.Pop();
+            if (entry.Tick > AnchorTick.Index)
+                Snapshots.Pop();
+            else
+                break;
         }
 
-        //Simulate Last snapshot
-        if (Snapshots.Count > 0)
+        if (TryGetSnapshot(context.Tick.Index, out var snapshot))
         {
-            ref var snapshot = ref Snapshots[^1];
             var configuration = new SnapshotApplyConfiguration(context.Tick, SnapshotApplySource.Simulate);
-
-            ApplySnapshot(in snapshot, configuration);
+            ApplyState(snapshot.State, configuration);
         }
     }
-
-    protected abstract TSnapshot CreateSnapshot();
-
-    protected abstract void ApplySnapshot(in TSnapshot snapshot, SnapshotApplyConfiguration configuration);
+    protected abstract void ApplyState(in TState snapshot, SnapshotApplyConfiguration configuration);
 }
 
 public struct SnapshotApplyConfiguration

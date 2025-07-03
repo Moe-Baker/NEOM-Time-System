@@ -3,7 +3,7 @@ using UnityEditor;
 using UnityEngine;
 
 [RequireComponent(typeof(TimeEntity))]
-public class BallProjectile : MonoBehaviour, IRewindStateSource<BallProjectile.Snapshot>
+public class BallProjectile : MonoBehaviour, IRewindStateSource<BallProjectile.State>
 {
     [SerializeField]
     float DespawnDelay = 2f;
@@ -11,17 +11,24 @@ public class BallProjectile : MonoBehaviour, IRewindStateSource<BallProjectile.S
     bool MarkedForDespawn;
     float DespawnTimestamp;
 
-    public Snapshot CreateSnapshot() => new Snapshot()
+    public State CreateSnapshot() => new State()
     {
         DespawnTimestamp = DespawnTimestamp,
         MarkedForDespawn = MarkedForDespawn,
     };
-    public void ApplySnapshot(in Snapshot snapshot, SnapshotApplyConfiguration configuration)
+    public void ApplySnapshot(in State snapshot, SnapshotApplyConfiguration configuration)
     {
         DespawnTimestamp = snapshot.DespawnTimestamp;
         MarkedForDespawn = snapshot.MarkedForDespawn;
     }
-    public struct Snapshot
+    public bool CheckChange(in State a, in State b)
+    {
+        if (RewindRecorder.ChangeChecker.CheckChange(a.DespawnTimestamp, b.DespawnTimestamp)) return true;
+        if (RewindRecorder.ChangeChecker.CheckChange(a.MarkedForDespawn, b.MarkedForDespawn)) return true;
+
+        return false;
+    }
+    public struct State
     {
         public float DespawnTimestamp;
         public bool MarkedForDespawn;
