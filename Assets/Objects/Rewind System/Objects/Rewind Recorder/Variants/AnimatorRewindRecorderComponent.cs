@@ -6,11 +6,27 @@ using UnityEngine;
 [RequireComponent(typeof(Animator))]
 public class AnimatorRewindRecorderComponent : MonoBehaviour
 {
+    Animator Animator;
+
     List<RewindRecorder> Recorders;
+
+    [SerializeField]
+    SourceFlags Source = SourceFlags.Bones | SourceFlags.State;
+    [Flags]
+    public enum SourceFlags
+    {
+        None = 0,
+
+        Bones = 1 << 0,
+        State = 1 << 1,
+
+        Everything = ~0,
+    }
 
     public class StateRecorder : RewindSnapshotRecorder<StateSnapshot>
     {
-        Animator Animator;
+        AnimatorRewindRecorderComponent Component;
+        Animator Animator => Component.Animator;
 
         public override void Begin()
         {
@@ -32,7 +48,7 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
 
         protected override StateSnapshot CreateSnapshot()
         {
-            return new StateSnapshot(Animator.speed);
+            return new StateSnapshot(Animator.enabled, Animator.applyRootMotion);
         }
         protected override void ApplySnapshot(in StateSnapshot snapshot, SnapshotApplyConfiguration configuration)
         {
@@ -40,28 +56,44 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
             {
                 case SnapshotApplySource.Replication:
                     Animator.enabled = false;
+                    Animator.applyRootMotion = false;
                     break;
 
                 case SnapshotApplySource.Simulate:
-                    Animator.enabled = true;
+                    Animator.enabled = snapshot.Enabled;
+                    Animator.applyRootMotion = snapshot.ApplyRootMotion;
                     break;
 
                 default: throw new NotImplementedException();
             }
         }
 
-        public StateRecorder(Animator Animator)
+        public StateRecorder(AnimatorRewindRecorderComponent Component)
         {
-            this.Animator = Animator;
+            this.Component = Component;
         }
     }
     public struct StateSnapshot
     {
-        public float Speed { get; }
-
-        public StateSnapshot(float Speed)
+        BooleanStates Booleans;
+        [Flags]
+        enum BooleanStates : byte
         {
-            this.Speed = Speed;
+            None = 0,
+
+            Enabled = 1 << 0,
+            ApplyRootMotion = 1 << 1
+        }
+
+        public bool Enabled => Booleans.HasFlag(BooleanStates.Enabled);
+        public bool ApplyRootMotion => Booleans.HasFlag(BooleanStates.ApplyRootMotion);
+
+        public StateSnapshot(bool Enabled, bool ApplyRootMotion)
+        {
+            Booleans = BooleanStates.None;
+
+            if (Enabled) Booleans |= BooleanStates.Enabled;
+            if (ApplyRootMotion) Booleans |= BooleanStates.ApplyRootMotion;
         }
     }
 
@@ -96,23 +128,50 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
 
     public class LayerRecorder : RewindSnapshotRecorder<LayerSnapshot>
     {
-        Animator Animator;
+        AnimatorRewindRecorderComponent Component;
+        Animator Animator => Component.Animator;
+
         int LayerIndex;
 
         protected override LayerSnapshot CreateSnapshot()
         {
             var info = Animator.GetCurrentAnimatorStateInfo(LayerIndex);
-            return new LayerSnapshot(info.shortNameHash, info.normalizedTime);
+            var weight = Animator.GetLayerWeight(LayerIndex);
+
+            return new LayerSnapshot(info.shortNameHash, info.normalizedTime, weight);
         }
         protected override void ApplySnapshot(in LayerSnapshot snapshot, SnapshotApplyConfiguration configuration)
         {
-            if (configuration.Source == SnapshotApplySource.Simulate)
-                Animator.Play(snapshot.StateHash, LayerIndex, snapshot.NormalizedTime);
+            switch (configuration.Source)
+            {
+                case SnapshotApplySource.Replication:
+                {
+                    if (Component.Source.HasFlag(SourceFlags.State))
+                    {
+                        Animator.SetLayerWeight(LayerIndex, snapshot.Weight);
+                        Animator.Play(snapshot.StateHash, LayerIndex, snapshot.NormalizedTime);
+
+                        Animator.Update(0);
+                    }
+                }
+                break;
+
+                case SnapshotApplySource.Simulate:
+                {
+                    Animator.SetLayerWeight(LayerIndex, snapshot.Weight);
+                    Animator.Play(snapshot.StateHash, LayerIndex, snapshot.NormalizedTime);
+
+                    Animator.Update(0);
+                }
+                break;
+
+                default: throw new NotImplementedException();
+            }
         }
 
-        public LayerRecorder(Animator Animator, int LayerIndex)
+        public LayerRecorder(AnimatorRewindRecorderComponent Component, int LayerIndex)
         {
-            this.Animator = Animator;
+            this.Component = Component;
             this.LayerIndex = LayerIndex;
         }
     }
@@ -120,19 +179,21 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
     {
         public int StateHash { get; }
         public float NormalizedTime { get; }
+        public float Weight { get; }
 
-        public LayerSnapshot(int StateHash, float NormalizedTime)
+        public LayerSnapshot(int StateHash, float NormalizedTime, float Weight)
         {
             this.StateHash = StateHash;
             this.NormalizedTime = NormalizedTime;
+            this.Weight = Weight;
         }
     }
 
     void Awake()
     {
-        var animator = GetComponent<Animator>();
+        Animator = GetComponent<Animator>();
 
-        var skins = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+        var skins = Array.Empty<SkinnedMeshRenderer>();
 
         //Initialize Recorders List Capacity
         {
@@ -140,54 +201,55 @@ public class AnimatorRewindRecorderComponent : MonoBehaviour
 
             capacity += 1; //State
 
-            if (animator.applyRootMotion) capacity += 1;
+            if (Animator.applyRootMotion) capacity += 1;
 
             //Bones
-            foreach (var skin in skins)
-                capacity += skin.bones.Length;
+            if (Source.HasFlag(SourceFlags.Bones))
+            {
+                skins = GetComponentsInChildren<SkinnedMeshRenderer>(true);
+
+                foreach (var skin in skins)
+                    capacity += skin.bones.Length;
+            }
 
             //Layers
-            capacity += animator.layerCount;
+            capacity += Animator.layerCount;
 
             Recorders = new List<RewindRecorder>(capacity);
         }
 
         //Create State Recorder
         {
-            var recorder = new StateRecorder(animator);
+            var recorder = new StateRecorder(this);
             Recorders.Add(recorder);
         }
 
         //Create Root Motion Recorder
-        if (animator.applyRootMotion)
+        if (Animator.applyRootMotion)
         {
-            var recorder = new TransformRewindRecorder(animator.transform);
+            var recorder = new TransformRewindRecorder(Animator.transform);
             Recorders.Add(recorder);
         }
 
         //Create Bone Recorders
+        foreach (var skin in skins)
         {
-            foreach (var skin in skins)
+            foreach (var bone in skin.bones)
             {
-                foreach (var bone in skin.bones)
-                {
-                    var recorder = new BoneRecorder(bone);
-                    Recorders.Add(recorder);
-                }
-            }
-        }
-
-        //Create Layer Recorder
-        {
-            for (int i = 0; i < animator.layerCount; i++)
-            {
-                var recorder = new LayerRecorder(animator, i);
+                var recorder = new BoneRecorder(bone);
                 Recorders.Add(recorder);
             }
         }
 
+        //Create Layer Recorder
+        for (int i = 0; i < Animator.layerCount; i++)
+        {
+            var recorder = new LayerRecorder(this, i);
+            Recorders.Add(recorder);
+        }
+
         //Ensure that animator is update so that no T-Pose is recorded
-        animator.Update(Time.deltaTime);
+        Animator.Update(Time.deltaTime);
 
         foreach (var recorder in Recorders)
             recorder.Begin();
